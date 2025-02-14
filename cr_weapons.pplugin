@@ -1,0 +1,25 @@
+{
+	"fileVersion": 1,
+	"version": "0.1.0",
+	"friendlyName": "[CR] Weapons Equipper",
+	"description": "Модуль ядра Custom Rounds, который позволяет выдавать оружия во время кастомного раунда",
+	"createdBy": "Fr4nch",
+	"createdByURL": "",
+	"docsURL": "",
+	"downloadURL": "",
+	"updateURL": "",
+	"entryPoint": "bin.cr_weapons.CRWeapons",
+	"supportedPlatforms": [],
+	"languageModule": {
+		"name": "python3"
+	},
+  	"dependencies": [
+		{
+			"name": "s2sdk"
+		},
+		{
+			"name": "customrounds"
+		}
+  	],
+	"exportedMethods": []
+}
