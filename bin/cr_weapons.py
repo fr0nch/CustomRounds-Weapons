@@ -1,4 +1,4 @@
-import plugify.plugin
+# import plugify.plugin
 from plugify.plugin import Plugin, Vector3
 from plugify.pps import s2sdk as s2, polyhook as pl
 from customrounds.bin.customrounds import CustomRounds
@@ -180,8 +180,8 @@ class CRWeapons(Plugin):
 		self.weapons_clear_map:			int  = 0
 		self.weapons_no_equip_clear:	int  = 0
 
-		self.weapons_attributes:		dict = {}
-		self.weapons_attributes_saved:	dict = {}
+		# self.weapons_attributes:		dict = {}
+		# self.weapons_attributes_saved:	dict = {}
 
 		self.c_cs_weapon_data: Optional[Callable[[int, str], int]] = None
 
@@ -218,6 +218,10 @@ class CRWeapons(Plugin):
 	# 		s2.PrintToServer(f"\tm_nZoomFOV1: {m_nZoomFOV1}\n\n")
 	#
 	# 	return 0
+
+	def plugin_end(self):
+		pl.UnhookDetour(self.can_acquire_ptr)
+		del self.can_acquire_ptr
 
 	def on_client_put_in_server(self, client):
 		if self.weapons_storage[client]:
@@ -337,7 +341,7 @@ class CRWeapons(Plugin):
 			self.weapons_list[1].clear()
 			self.weapons_attributes.clear()
 
-			self.set_weapon_attributes(True)
+			# self.set_weapon_attributes(True)
 
 			for client in range(64):
 				if s2.IsClientInGame(client) and s2.IsClientAlive(client):
