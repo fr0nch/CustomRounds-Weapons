@@ -339,7 +339,7 @@ class CRWeapons(Plugin):
 		if is_cr:
 			self.weapons_list[0].clear()
 			self.weapons_list[1].clear()
-			self.weapons_attributes.clear()
+			# self.weapons_attributes.clear()
 
 			# self.set_weapon_attributes(True)
 
