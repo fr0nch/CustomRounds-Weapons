@@ -313,7 +313,7 @@ class CRWeapons(Plugin):
 					if isinstance(w_list, list):
 						self.weapons_list[i] = list(w_list)
 
-			self.weapons_attributes		= copy.deepcopy(self.cr_core.get_round_setting_dict_value("weapons","attributes", []))
+			# self.weapons_attributes		= copy.deepcopy(self.cr_core.get_round_setting_dict_value("weapons","attributes", []))
 			# self.set_weapon_attributes()
 
 			self.weapons_block			= bool(self.cr_core.get_round_setting_dict_value("weapons","block", 0))
