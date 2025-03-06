@@ -1,7 +1,6 @@
-# import plugify.plugin
 from plugify.plugin import Plugin, Vector3
 from plugify.pps import s2sdk as s2, polyhook as pl
-from customrounds.bin.customrounds import CustomRounds
+from customrounds.src.customrounds import CustomRounds
 
 from functools import partial
 from collections.abc import Callable
@@ -170,20 +169,32 @@ class CSWeaponGearSlot(IntEnum):
 class CRWeapons(Plugin):
 	def __init__(self):
 		self.cr_core = CustomRounds()
-		self.can_acquire_ptr: Optional[ctypes.c_void_p] = None
+		self.can_acquire_ptr = None
 
-		self.weapons_list:				list = [[]] * 2
-		self.weapons_storage:			list = [[]] * 64
+		self.weapons_list:				list = [[] for _ in range(2)]
+		self.weapons_storage:			list = [[] for _ in range(64)]
 		self.weapons_block:				bool = False
 		self.weapons_save:				bool = False
 		self.weapons_no_knife:			bool = False
 		self.weapons_clear_map:			int  = 0
 		self.weapons_no_equip_clear:	int  = 0
 
-		# self.weapons_attributes:		dict = {}
+		self.vm = None
+
+		self.weapons_attributes:		list = [[] for _ in range(2)]
 		# self.weapons_attributes_saved:	dict = {}
 
+		# self.cs_weapon_data = None
+
 		self.c_cs_weapon_data: Optional[Callable[[int, str], int]] = None
+
+	def get_weapon_data_from_key(self):
+		main_plugins_dir = Path(__file__).resolve().parent.parent.parent
+		config_path = str(main_plugins_dir / "s2sdk" / "gamedata" / "s2sdk.games.txt")
+		gameconfig = s2.LoadGameConfigFile(config_path)
+
+		cs_weapon_data = s2.GetGameConfigMemSig(gameconfig, "GetCSWeaponDataFromKey")
+		self.c_cs_weapon_data = ctypes.CFUNCTYPE(ctypes.c_uint64, ctypes.c_uint32, ctypes.c_char_p)(cs_weapon_data)
 
 	def plugin_start(self):
 		self.hook_can_acquire()
@@ -195,33 +206,15 @@ class CRWeapons(Plugin):
 		s2.OnClientPutInServer_Register(partial(self.on_client_put_in_server))
 		s2.OnClientDisconnect_Register(partial(self.on_client_disconnect))
 
-		# s2.OnEntityCreated_Register(partial(self.on_entity_created))
+		# self.vm = dc.NewVM(4096)
+		# dc.Mode(self.vm, 0)
 
-		# cmd_flags = s2.ConVarFlag.LinkedConcommand | s2.ConVarFlag.ServerCanExecute | s2.ConVarFlag.ClientCanExecute
-		# s2.AddConsoleCommand('cr_check_attr', 'Set next custom round', cmd_flags, partial(self.cmd_check_attr))
-
-		# self.get_weapon_data_from_key()
-
-	# def cmd_check_attr(self, client, ctx, args):
-	# 	weapons = s2.GetClientWeapons(client)
-	# 	for weapon in weapons:
-	# 		weapon_vdata = s2.GetWeaponVData(weapon)
-	# 		weapon_vdata2 = self.c_cs_weapon_data(-1, ctypes.c_char_p(f"{WeaponEnum.get_name_by_defindex(s2.GetWeaponDefIndex(weapon))}".encode()) )
-	# 		s2.PrintToServer(f"weapon_vdata: {weapon_vdata}, weapon_vdata2: {weapon_vdata2}\n")
-	#
-	# 		s2.PrintToServer(f"[cmd_check_attr]\n\tweapon: {WeaponEnum.get_name_by_defindex(s2.GetWeaponDefIndex(weapon))}\n")
-	# 		m_nNextPrimaryAttackTick = s2.GetEntSchema(weapon, "CBasePlayerWeapon", "m_nNextSecondaryAttackTick", 0)
-	# 		s2.PrintToServer(f"\tm_nNextSecondaryAttackTick: {m_nNextPrimaryAttackTick}\n")
-	# 		m_nZoomLevels = s2.GetEntSchema2(weapon_vdata, "CCSWeaponBaseVData", "m_nZoomLevels", 0)
-	# 		s2.PrintToServer(f"\tm_nZoomLevels: {m_nZoomLevels}\n")
-	# 		m_nZoomFOV1 = s2.GetEntSchema2(weapon_vdata, "CCSWeaponBaseVData", "m_nZoomFOV1", 0)
-	# 		s2.PrintToServer(f"\tm_nZoomFOV1: {m_nZoomFOV1}\n\n")
-	#
-	# 	return 0
+		self.get_weapon_data_from_key()
 
 	def plugin_end(self):
 		pl.UnhookDetour(self.can_acquire_ptr)
 		del self.can_acquire_ptr
+		# dc.Free(self.vm)
 
 	def on_client_put_in_server(self, client):
 		if self.weapons_storage[client]:
@@ -229,10 +222,6 @@ class CRWeapons(Plugin):
 
 	def on_client_disconnect(self, client):
 		self.weapons_storage[client].clear()
-
-	# def on_entity_created(self, entity):
-	# 	if self.cr_core.current_round_are_custom():
-	# 		pass
 
 	def on_player_spawn(self, client):
 		if s2.IsClientInGame(client) and s2.IsClientAlive(client):
@@ -251,57 +240,42 @@ class CRWeapons(Plugin):
 
 		return 0
 
-	# def get_weapon_data_from_key(self):
-	# 	main_plugins_dir = Path(__file__).resolve().parent.parent.parent
-	# 	config_path = str(main_plugins_dir / "s2sdk" / "gamedata" / "s2sdk.games.txt")
-	# 	gameconfig = s2.LoadGameConfigFile(config_path)
-	# 	cs_weapon_data = s2.GetGameConfigMemSig(gameconfig, "GetCSWeaponDataFromKey")
-	# 	self.c_cs_weapon_data = ctypes.CFUNCTYPE(ctypes.c_uint64, ctypes.c_uint32, ctypes.c_char_p)(cs_weapon_data)
+	def set_weapon_attributes(self, default = False):
+		for weapon in self.weapons_attributes[int(default)]:
+			weapon_vdata = self.c_cs_weapon_data(-1, ctypes.c_char_p(f"{WeaponEnum.get_defindex_by_name(weapon)}".encode()))
 
-	# def set_weapon_attributes(self, default = False):
-	# 	weapons_attributes = self.weapons_attributes_saved if default else self.weapons_attributes
-	#
-	# 	for weapon in weapons_attributes:
-	# 		# weapon_hndl = s2.CreateEntityByName(weapon)
-	# 		# s2.DispatchSpawn2(weapon_hndl, ["origin"], [Vector3(0.0, 0.0, 0.0)])
-	# 		#s2.DispatchSpawn(weapon_hndl)
-	# 		# s2.TeleportEntity(weapon_hndl, )
-	# 		weapon_vdata = self.c_cs_weapon_data(-1, ctypes.c_char_p(f"{weapon}".encode()))
-	# 		#weapon_vdata = s2.GetWeaponVData(weapon_hndl)
-	# 		self.cr_core.print(f"weapon_vdata: {weapon_vdata}")
-	#
-	# 		m_nZoomLevels = s2.GetEntSchema2(weapon_vdata, "CCSWeaponBaseVData", "m_nZoomLevels", 0)
-	# 		s2.PrintToServer(f"[set_weapon_attributes]\n\tm_nZoomLevels: {m_nZoomLevels}\n")
-	#
-	# 		if not default:
-	# 			if not weapon in self.weapons_attributes_saved:
-	# 				self.weapons_attributes_saved[weapon] = {}
-	#
-	# 		weapon_attrs: dict = self.weapons_attributes_saved[weapon] if default else weapons_attributes[weapon]
-	#
-	# 		for attr_key, attr_value in weapon_attrs.items():
-	# 			if not default:
-	# 				if not attr_key in self.weapons_attributes_saved[weapon]:
-	# 					self.weapons_attributes_saved[weapon].update({attr_key: attr_value})
-	# 					self.cr_core.print(f"weapons_attributes_saved: {self.weapons_attributes_saved[weapon]}\n")
-	#
-	# 			# self.cr_core.print(f"weapon: {weapon}, attr_key: {attr_key}, attr_value: {attr_value}\n")
-	#
-	# 			value_atr = 0
-	#
-	# 			if type(attr_value) is float:
-	# 				# s2.SetEntSchemaFloat2(weapon_vdata, "CCSWeaponBaseVData", attr_key, float(attr_value), True, 0)
-	# 				value_atr = s2.GetEntSchema2(weapon_vdata, "CCSWeaponBaseVData", attr_key, 0)
-	# 			elif type(attr_value) is str:
-	# 				# s2.SetEntSchemaString2(weapon_vdata, "CCSWeaponBaseVData", attr_key, str(attr_value), True, 0)
-	# 				value_atr = s2.GetEntSchema2(weapon_vdata, "CCSWeaponBaseVData", attr_key, 0)
-	# 			else:
-	# 				# s2.SetEntSchema2(weapon_vdata, "CCSWeaponBaseVData", attr_key, int(attr_value), True, 0)
-	# 				value_atr = s2.GetEntSchema2(weapon_vdata, "CCSWeaponBaseVData", attr_key, 0)
-	#
-	# 			self.cr_core.print(f"[set_weapon_attributes][default {default}] weapon: {weapon}, {attr_key}: {value_atr}\n")
-	#
-	# 		#s2.RemoveEntity(weapon_hndl)
+			for attr_key, attr_value in self.weapons_attributes[int(default)].items():
+				if not default:
+					if not weapon in self.weapons_attributes[0]:
+						self.weapons_attributes[int(default)][weapon] = {}
+				else:
+					pass
+
+
+
+			# weapon_attrs: dict = self.weapons_attributes_saved[weapon] if default else weapons_attributes[weapon]
+			#
+			# for attr_key, attr_value in weapon_attrs.items():
+			# 	if not default:
+			# 		if not attr_key in self.weapons_attributes_saved[weapon]:
+			# 			self.weapons_attributes_saved[weapon].update({attr_key: attr_value})
+			# 			s2.PrintToConsoleAll(f"weapons_attributes_saved: {self.weapons_attributes_saved[weapon]}\n")
+			#
+			# 	s2.PrintToConsoleAll(f"weapon: {weapon}, attr_key: {attr_key}, attr_value: {attr_value}\n")
+			#
+			# 	value_atr = 0
+			#
+			# 	if type(attr_value) is float:
+			# 		s2.SetEntSchemaFloat2(weapon_vdata, "CCSWeaponBaseVData", attr_key, float(attr_value), True, 0)
+			# 		value_atr = s2.GetEntSchema2(weapon_vdata, "CCSWeaponBaseVData", attr_key, 0)
+			# 	elif type(attr_value) is str:
+			# 		s2.SetEntSchemaString2(weapon_vdata, "CCSWeaponBaseVData", attr_key, str(attr_value), True, 0)
+			# 		value_atr = s2.GetEntSchema2(weapon_vdata, "CCSWeaponBaseVData", attr_key, 0)
+			# 	else:
+			# 		s2.SetEntSchema2(weapon_vdata, "CCSWeaponBaseVData", attr_key, int(attr_value), True, 0)
+			# 		value_atr = s2.GetEntSchema2(weapon_vdata, "CCSWeaponBaseVData", attr_key, 0)
+			#
+			# 	s2.PrintToConsoleAll(f"[set_weapon_attributes][default {default}] weapon: {weapon}, {attr_key}: {value_atr}\n")
 
 	def on_round_start(self):
 		is_cr = self.cr_core.current_round_are_custom()
@@ -313,8 +287,8 @@ class CRWeapons(Plugin):
 					if isinstance(w_list, list):
 						self.weapons_list[i] = list(w_list)
 
-			# self.weapons_attributes		= copy.deepcopy(self.cr_core.get_round_setting_dict_value("weapons","attributes", []))
-			# self.set_weapon_attributes()
+			self.weapons_attributes		= copy.deepcopy(self.cr_core.get_round_setting_dict_value("weapons","attributes", []))
+			self.set_weapon_attributes()
 
 			self.weapons_block			= bool(self.cr_core.get_round_setting_dict_value("weapons","block", 0))
 			self.weapons_save			= bool(self.cr_core.get_round_setting_dict_value("weapons","save", 1))
@@ -339,9 +313,9 @@ class CRWeapons(Plugin):
 		if is_cr:
 			self.weapons_list[0].clear()
 			self.weapons_list[1].clear()
-			# self.weapons_attributes.clear()
+			self.weapons_attributes.clear()
 
-			# self.set_weapon_attributes(True)
+			self.set_weapon_attributes(True)
 
 			for client in range(64):
 				if s2.IsClientInGame(client) and s2.IsClientAlive(client):
@@ -373,7 +347,6 @@ class CRWeapons(Plugin):
 		]
 
 		slot_weapons = {}
-
 		weapons_list = self.weapons_storage[client] if saved else self.weapons_list[0]
 
 		for weapon in weapons_list:
