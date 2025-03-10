@@ -1,4 +1,4 @@
-from plugify.plugin import Plugin, Vector3
+from plugify.plugin import Plugin
 from plugify.pps import s2sdk as s2, polyhook as pl
 from customrounds.src.customrounds import CustomRounds
 
@@ -6,7 +6,7 @@ from functools import partial
 from collections.abc import Callable
 from typing import Optional
 from pathlib import Path
-from enum import IntEnum, StrEnum
+from enum import IntEnum
 
 import ctypes
 import copy
@@ -173,17 +173,16 @@ class CRWeapons(Plugin):
 
 		self.weapons_list:				list = [[] for _ in range(2)]
 		self.weapons_storage:			list = [[] for _ in range(64)]
+		self.weapons_attributes:		list = [{} for _ in range(2)]
+
 		self.weapons_block:				bool = False
 		self.weapons_save:				bool = False
 		self.weapons_no_knife:			bool = False
 		self.weapons_clear_map:			int  = 0
 		self.weapons_no_equip_clear:	int  = 0
 
-		self.vm = None
-
-		self.weapons_attributes:		list = [[] for _ in range(2)]
+		# self.vm = None
 		# self.weapons_attributes_saved:	dict = {}
-
 		# self.cs_weapon_data = None
 
 		self.c_cs_weapon_data: Optional[Callable[[int, str], int]] = None
@@ -241,41 +240,24 @@ class CRWeapons(Plugin):
 		return 0
 
 	def set_weapon_attributes(self, default = False):
-		for weapon in self.weapons_attributes[int(default)]:
+		for weapon, attributes in self.weapons_attributes[default].items():
+			# weapon_awp, {'m_nZoomLevels': 0, 'm_nZoomFOV1': 0, 'm_flZoomTime0': 0.0}
 			weapon_vdata = self.c_cs_weapon_data(-1, ctypes.c_char_p(f"{WeaponEnum.get_defindex_by_name(weapon)}".encode()))
 
-			for attr_key, attr_value in self.weapons_attributes[int(default)].items():
+			for attr_key, attr_value in attributes.items():
 				if not default:
-					if not weapon in self.weapons_attributes[0]:
-						self.weapons_attributes[int(default)][weapon] = {}
+					if weapon not in self.weapons_attributes[1]:
+						self.weapons_attributes[1][weapon] = {}
+
+					self.weapons_attributes[1][weapon][attr_key] = s2.GetEntSchema2(weapon_vdata, "CCSWeaponBaseVData", attr_key, 0)
+
+				if type(attr_value) is float:
+					s2.SetEntSchemaFloat2(weapon_vdata, "CCSWeaponBaseVData", attr_key, float(attr_value), True, 0)
+				elif type(attr_value) is str:
+					s2.SetEntSchemaString2(weapon_vdata, "CCSWeaponBaseVData", attr_key, str(attr_value), True, 0)
 				else:
-					pass
+					s2.SetEntSchema2(weapon_vdata, "CCSWeaponBaseVData", attr_key, int(attr_value), True, 0)
 
-
-
-			# weapon_attrs: dict = self.weapons_attributes_saved[weapon] if default else weapons_attributes[weapon]
-			#
-			# for attr_key, attr_value in weapon_attrs.items():
-			# 	if not default:
-			# 		if not attr_key in self.weapons_attributes_saved[weapon]:
-			# 			self.weapons_attributes_saved[weapon].update({attr_key: attr_value})
-			# 			s2.PrintToConsoleAll(f"weapons_attributes_saved: {self.weapons_attributes_saved[weapon]}\n")
-			#
-			# 	s2.PrintToConsoleAll(f"weapon: {weapon}, attr_key: {attr_key}, attr_value: {attr_value}\n")
-			#
-			# 	value_atr = 0
-			#
-			# 	if type(attr_value) is float:
-			# 		s2.SetEntSchemaFloat2(weapon_vdata, "CCSWeaponBaseVData", attr_key, float(attr_value), True, 0)
-			# 		value_atr = s2.GetEntSchema2(weapon_vdata, "CCSWeaponBaseVData", attr_key, 0)
-			# 	elif type(attr_value) is str:
-			# 		s2.SetEntSchemaString2(weapon_vdata, "CCSWeaponBaseVData", attr_key, str(attr_value), True, 0)
-			# 		value_atr = s2.GetEntSchema2(weapon_vdata, "CCSWeaponBaseVData", attr_key, 0)
-			# 	else:
-			# 		s2.SetEntSchema2(weapon_vdata, "CCSWeaponBaseVData", attr_key, int(attr_value), True, 0)
-			# 		value_atr = s2.GetEntSchema2(weapon_vdata, "CCSWeaponBaseVData", attr_key, 0)
-			#
-			# 	s2.PrintToConsoleAll(f"[set_weapon_attributes][default {default}] weapon: {weapon}, {attr_key}: {value_atr}\n")
 
 	def on_round_start(self):
 		is_cr = self.cr_core.current_round_are_custom()
@@ -287,7 +269,7 @@ class CRWeapons(Plugin):
 					if isinstance(w_list, list):
 						self.weapons_list[i] = list(w_list)
 
-			self.weapons_attributes		= copy.deepcopy(self.cr_core.get_round_setting_dict_value("weapons","attributes", []))
+			self.weapons_attributes[0]	= copy.deepcopy(self.cr_core.get_round_setting_dict_value("weapons","attributes", []))
 			self.set_weapon_attributes()
 
 			self.weapons_block			= bool(self.cr_core.get_round_setting_dict_value("weapons","block", 0))
@@ -313,9 +295,11 @@ class CRWeapons(Plugin):
 		if is_cr:
 			self.weapons_list[0].clear()
 			self.weapons_list[1].clear()
-			self.weapons_attributes.clear()
 
 			self.set_weapon_attributes(True)
+
+			self.weapons_attributes[0].clear()
+			self.weapons_attributes[1].clear()
 
 			for client in range(64):
 				if s2.IsClientInGame(client) and s2.IsClientAlive(client):
@@ -357,8 +341,7 @@ class CRWeapons(Plugin):
 
 			# if weapon in self.weapons_attributes:
 			# 	if "m_nZoomLevels" in self.weapons_attributes[weapon]:
-			# 		s2.SetEntSchemaFloat(weapon_hndl, "CBasePlayerWeapon",
-			# 			"m_nNextSecondaryAttackTick", ctypes.c_float(10000), True, 0)
+			# 		s2.SetEntSchemaFloat(weapon_hndl, "CBasePlayerWeapon", "m_nNextSecondaryAttackTick", ctypes.c_float(10000), True, 0)
 
 		if saved:
 			self.weapons_storage[client].clear()
@@ -471,7 +454,7 @@ class CRWeapons(Plugin):
 		self.cr_core.print(f"[HookDetour] can_acquire_ptr: {self.can_acquire_ptr}")
 		pl.AddCallback(self.can_acquire_ptr, False, part)
 
-	def on_can_acquire(self, post: bool, params: int, count: int, ret: int):
+	def on_can_acquire(self, _post: bool, params: int, _count: int, ret: int):
 		# self.cr_core.print(f"[HookDetour] Event 'on_can_acquire' called.")
 		item = pl.GetArgumentPointer(params, 1)
 		if not item:
