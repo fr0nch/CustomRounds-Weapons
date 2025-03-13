@@ -1,14 +1,11 @@
 from plugify.plugin import Plugin
-from plugify.pps import s2sdk as s2, polyhook as pl
+from plugify.pps import s2sdk as s2, polyhook as pl, dyncall as dc
 from customrounds.src.customrounds import CustomRounds
 
 from functools import partial
-from collections.abc import Callable
-from typing import Optional
 from pathlib import Path
 from enum import IntEnum
 
-import ctypes
 import copy
 
 class AcquireMethod(IntEnum):
@@ -168,8 +165,15 @@ class CSWeaponGearSlot(IntEnum):
 
 class CRWeapons(Plugin):
 	def __init__(self):
-		self.cr_core = CustomRounds()
-		self.can_acquire_ptr = None
+		self.cr: CustomRounds = CustomRounds()
+
+		self.gameconfig:				int = 0
+
+		self.can_acquire_ptr:			int = 0
+		self.on_weapon_equip_ptr:		int = 0
+
+		self.gamerules:					int = 0
+		self.roundtime:					int	= 0
 
 		self.weapons_list:				list = [[] for _ in range(2)]
 		self.weapons_storage:			list = [[] for _ in range(64)]
@@ -181,39 +185,41 @@ class CRWeapons(Plugin):
 		self.weapons_clear_map:			int  = 0
 		self.weapons_no_equip_clear:	int  = 0
 
-		# self.vm = None
-		# self.weapons_attributes_saved:	dict = {}
-		# self.cs_weapon_data = None
-
-		self.c_cs_weapon_data: Optional[Callable[[int, str], int]] = None
-
-	def get_weapon_data_from_key(self):
-		main_plugins_dir = Path(__file__).resolve().parent.parent.parent
-		config_path = str(main_plugins_dir / "s2sdk" / "gamedata" / "s2sdk.games.txt")
-		gameconfig = s2.LoadGameConfigFile(config_path)
-
-		cs_weapon_data = s2.GetGameConfigMemSig(gameconfig, "GetCSWeaponDataFromKey")
-		self.c_cs_weapon_data = ctypes.CFUNCTYPE(ctypes.c_uint64, ctypes.c_uint32, ctypes.c_char_p)(cs_weapon_data)
+		self.vm = None
+		self.cs_weapon_data = None
 
 	def plugin_start(self):
-		self.hook_can_acquire()
+		main_plugins_dir = Path(__file__).resolve().parent.parent.parent
+		config_path = str(main_plugins_dir / "s2sdk" / "gamedata" / "s2sdk.games.txt")
 
-		self.cr_core.on_round_start_register(partial(self.on_round_start))
-		self.cr_core.on_round_end_register(partial(self.on_round_end))
-		self.cr_core.on_player_spawn_register(partial(self.on_player_spawn))
+		self.gameconfig = s2.LoadGameConfigFile(config_path)
+		self.cs_weapon_data = s2.GetGameConfigMemSig(self.gameconfig, "GetCSWeaponDataFromKey")
+
+		self.hook_can_acquire()
+		self.hook_on_weapon_equip()
+
+		self.cr.on_round_start_register(partial(self.on_round_start))
+		self.cr.on_round_end_register(partial(self.on_round_end))
+		self.cr.on_player_spawn_register(partial(self.on_player_spawn))
 
 		s2.OnClientPutInServer_Register(partial(self.on_client_put_in_server))
 		s2.OnClientDisconnect_Register(partial(self.on_client_disconnect))
 
-		# self.vm = dc.NewVM(4096)
-		# dc.Mode(self.vm, 0)
+		s2.OnServerActivate_Register(partial(self.on_server_activate))
 
-		self.get_weapon_data_from_key()
+		self.vm = dc.NewVM(4096)
+		dc.Mode(self.vm, 0)
 
 	def plugin_end(self):
+		dc.Free(self.vm)
 		pl.UnhookDetour(self.can_acquire_ptr)
+		pl.UnhookDetour(self.on_weapon_equip_ptr)
 		del self.can_acquire_ptr
-		# dc.Free(self.vm)
+		del self.on_weapon_equip_ptr
+
+	def on_server_activate(self):
+		self.gamerules = s2.GetGameRules()
+		self.roundtime = s2.GetEntSchema2(self.gamerules, "CCSGameRules", "m_iRoundTime", 0)
 
 	def on_client_put_in_server(self, client):
 		if self.weapons_storage[client]:
@@ -224,7 +230,7 @@ class CRWeapons(Plugin):
 
 	def on_player_spawn(self, client):
 		if s2.IsClientInGame(client) and s2.IsClientAlive(client):
-			if self.cr_core.current_round_are_custom():
+			if self.cr.current_round_are_custom():
 
 				if self.weapons_save and self.weapons_no_equip_clear < 2:
 					self.save_weapons(client)
@@ -236,20 +242,34 @@ class CRWeapons(Plugin):
 
 				if not self.weapons_no_knife and (not self.weapons_list[0] or not self.weapons_list[1]):
 					CRWeapons.switch_weapon_on_knife(client)
+			else:
+				if self.weapons_storage[client]:
+					self.clear_weapons(client)
+					self.give_weapons(client, True)
 
 		return 0
+
+	def get_weapon_vdata_from_key(self, weapon_name: str = "") -> int:
+		dc.Reset(self.vm)
+		dc.ArgInt32(self.vm, -1)
+		dc.ArgString(self.vm, str(WeaponEnum.get_defindex_by_name(weapon_name)))
+
+		return dc.CallPointer(self.vm, self.cs_weapon_data)
 
 	def set_weapon_attributes(self, default = False):
 		for weapon, attributes in self.weapons_attributes[default].items():
 			# weapon_awp, {'m_nZoomLevels': 0, 'm_nZoomFOV1': 0, 'm_flZoomTime0': 0.0}
-			weapon_vdata = self.c_cs_weapon_data(-1, ctypes.c_char_p(f"{WeaponEnum.get_defindex_by_name(weapon)}".encode()))
+			weapon_vdata = self.get_weapon_vdata_from_key(weapon)
 
 			for attr_key, attr_value in attributes.items():
 				if not default:
 					if weapon not in self.weapons_attributes[1]:
 						self.weapons_attributes[1][weapon] = {}
 
-					self.weapons_attributes[1][weapon][attr_key] = s2.GetEntSchema2(weapon_vdata, "CCSWeaponBaseVData", attr_key, 0)
+					if "fl" in attr_key:
+						self.weapons_attributes[1][weapon][attr_key] = s2.GetEntSchemaFloat2(weapon_vdata, "CCSWeaponBaseVData", attr_key, 0)
+					else:
+						self.weapons_attributes[1][weapon][attr_key] = s2.GetEntSchema2(weapon_vdata, "CCSWeaponBaseVData", attr_key, 0)
 
 				if type(attr_value) is float:
 					s2.SetEntSchemaFloat2(weapon_vdata, "CCSWeaponBaseVData", attr_key, float(attr_value), True, 0)
@@ -258,41 +278,36 @@ class CRWeapons(Plugin):
 				else:
 					s2.SetEntSchema2(weapon_vdata, "CCSWeaponBaseVData", attr_key, int(attr_value), True, 0)
 
-
 	def on_round_start(self):
-		is_cr = self.cr_core.current_round_are_custom()
-
-		if is_cr:
+		if self.cr.current_round_are_custom():
 			for i in range(2):
-				w_list = self.cr_core.get_round_setting_dict_value( "weapons", "give" if i == 0 else "ignore", [] )
+				w_list = self.cr.get_round_setting_dict_value( "weapons", "give" if i == 0 else "ignore", [] )
 				if w_list:
 					if isinstance(w_list, list):
 						self.weapons_list[i] = list(w_list)
 
-			self.weapons_attributes[0]	= copy.deepcopy(self.cr_core.get_round_setting_dict_value("weapons","attributes", []))
+			self.weapons_attributes[0]	= copy.deepcopy(self.cr.get_round_setting_dict_value("weapons","attributes", []))
 			self.set_weapon_attributes()
 
-			self.weapons_block			= bool(self.cr_core.get_round_setting_dict_value("weapons","block", 0))
-			self.weapons_save			= bool(self.cr_core.get_round_setting_dict_value("weapons","save", 1))
-			self.weapons_no_knife		= bool(self.cr_core.get_round_setting_dict_value("weapons","no_knife", 0))
+			self.weapons_block			= bool(self.cr.get_round_setting_dict_value("weapons","block", 0))
+			self.weapons_save			= bool(self.cr.get_round_setting_dict_value("weapons","save", 1))
+			self.weapons_no_knife		= bool(self.cr.get_round_setting_dict_value("weapons","no_knife", 0))
 
 			if not self.weapons_no_knife:
 				self.weapons_list[1].append("weapon_knife")
 
-			self.weapons_clear_map		= int(self.cr_core.get_round_setting_dict_value("weapons","clear_map", 0))
-			self.weapons_no_equip_clear	= int(self.cr_core.get_round_setting_dict_value("weapons","no_equip_clear", 0))
+			self.weapons_clear_map		= int(self.cr.get_round_setting_dict_value("weapons","clear_map", 0))
+			self.weapons_no_equip_clear	= int(self.cr.get_round_setting_dict_value("weapons","no_equip_clear", 0))
 
 			if self.weapons_clear_map == 1 or self.weapons_clear_map == 3:
 				CRWeapons.clear_map()
 
-		# self.cr_core.print(f"\n\t[CR WEAPONS]\n\n\tRound Start\n\n\tCR Status: {is_cr}\n\tWeapons List: {self.weapons_list[0]}\n")
+		# self.cr.print(f"\n\t[CR WEAPONS]\n\n\tRound Start\n\n\tCR Status: {is_cr}\n\tWeapons List: {self.weapons_list[0]}\n")
 
 		return 0
 
 	def on_round_end(self):
-		is_cr = self.cr_core.current_round_are_custom()
-
-		if is_cr:
+		if self.cr.current_round_are_custom():
 			self.weapons_list[0].clear()
 			self.weapons_list[1].clear()
 
@@ -319,7 +334,7 @@ class CRWeapons(Plugin):
 			if self.weapons_block:
 				self.weapons_block = False
 
-		# self.cr_core.print(f"\n\t[CR WEAPONS]\n\n\tRound End\n\n\tCR Status: {is_cr}\n\tWeapons List: {self.weapons_list[0]}\n")
+		# self.cr.print(f"\n\t[CR WEAPONS]\n\n\tRound End\n\n\tCR Status: {is_cr}\n\tWeapons List: {self.weapons_list[0]}\n")
 
 		return 0
 
@@ -338,10 +353,6 @@ class CRWeapons(Plugin):
 			weapon_slot = CRWeapons.get_weapon_slot(weapon_hndl)
 			if weapon_slot != CSWeaponGearSlot.GEAR_SLOT_INVALID:
 				slot_weapons[weapon_slot] = weapon_hndl
-
-			# if weapon in self.weapons_attributes:
-			# 	if "m_nZoomLevels" in self.weapons_attributes[weapon]:
-			# 		s2.SetEntSchemaFloat(weapon_hndl, "CBasePlayerWeapon", "m_nNextSecondaryAttackTick", ctypes.c_float(10000), True, 0)
 
 		if saved:
 			self.weapons_storage[client].clear()
@@ -365,12 +376,11 @@ class CRWeapons(Plugin):
 			if is_melee and self.weapons_no_knife:
 				continue
 
-			self.weapons_storage[client].append(weapon)
-			self.cr_core.print(f"Weapon saved {weapon}")
+			self.weapons_storage[client].append(s2.GetEntityClassname(weapon))
+			self.cr.print(f"Weapon saved {s2.GetEntityClassname(weapon)}[h: {weapon}]")
 
 	def clear_weapons(self, client):
 		weapons_list = s2.GetClientWeapons(client)
-		# self.cr_core.print(f"Client: {s2.GetClientName(client)}[{client}]\nWeapons: {weapons_list}")
 
 		for weapon in weapons_list:
 			# m_attribute_manager = s2.GetEntSchema(weapon, "CEconEntity", "m_AttributeManager", 0)
@@ -379,12 +389,11 @@ class CRWeapons(Plugin):
 			# weapon_def = s2.GetWeaponDefIndex(weapon)
 
 			if CRWeapons.is_weapon_knife(weapon):
-				if not self.weapons_no_knife or self.cr_core.check_round_are_ended():
+				if not self.weapons_no_knife or self.cr.check_round_are_ended():
 					CRWeapons.switch_weapon_on_knife(client, False, weapon)
 					continue
 
 			s2.RemoveWeapon(client, weapon)
-			# self.cr_core.print(f"weapon: {weapon_def}")
 
 		return 0
 
@@ -397,8 +406,6 @@ class CRWeapons(Plugin):
 			if ent == -1:
 				break
 
-			# self.cr_core.print(s2.GetEntityClassname(ent))
-
 			owner_entity = s2.GetEntSchemaEnt(ent, "CBaseEntity", "m_hOwnerEntity", 0)
 			if owner_entity == -1:
 				item_def = s2.GetWeaponDefIndex(ent)
@@ -410,7 +417,6 @@ class CRWeapons(Plugin):
 	def get_weapon_slot(weapon) -> CSWeaponGearSlot:
 		weapon_vdata = s2.GetWeaponVData(weapon)
 		weapon_gear_slot = CSWeaponGearSlot(s2.GetEntSchema2(weapon_vdata, "CCSWeaponBaseVData", "m_GearSlot", 0))
-		# CR.cr_core.print(f"[1] m_GearSlot: {weapon_gear_slot}")
 
 		return weapon_gear_slot
 
@@ -437,38 +443,56 @@ class CRWeapons(Plugin):
 		return False
 
 	def hook_can_acquire(self):
-		main_plugins_dir = Path(__file__).resolve().parent.parent.parent
-		config_path = str(main_plugins_dir / "s2sdk" / "gamedata" / "s2sdk.games.txt")
-		gameconfig = s2.LoadGameConfigFile(config_path)
-		can_acquire = s2.GetGameConfigMemSig(gameconfig, "CCSPlayer_ItemServices_CanAcquire")
+		can_acquire = s2.GetGameConfigMemSig(self.gameconfig, "CCSPlayer_ItemServices_CanAcquire")
 
 		dt = pl.DataType
 		# CPlayer_ItemServices::CanAcquire( CEconItemView *pItem, AcquireMethod::Type acquireMethod, uint16 *pLimit )
 		self.can_acquire_ptr = pl.HookDetour(can_acquire, dt.Int8, [dt.Pointer, dt.Pointer, dt.Int32, dt.Pointer])
 
 		if not self.can_acquire_ptr:
-			self.cr_core.print(f"[HookDetour] can_acquire_ptr: {str(self.can_acquire_ptr)}")
 			return 0
 
-		part = partial(self.on_can_acquire)
-		self.cr_core.print(f"[HookDetour] can_acquire_ptr: {self.can_acquire_ptr}")
-		pl.AddCallback(self.can_acquire_ptr, False, part)
+		pl.AddCallback(self.can_acquire_ptr, False, partial(self.on_can_acquire))
 
-	def on_can_acquire(self, _post: bool, params: int, _count: int, ret: int):
-		# self.cr_core.print(f"[HookDetour] Event 'on_can_acquire' called.")
-		item = pl.GetArgumentPointer(params, 1)
+	def on_can_acquire(self, _hook: int, _params: int, _count: int, _ret: int, _post: bool):
+		item = pl.GetArgumentPointer(_params, 1)
 		if not item:
 			return pl.ResultType.Ignored
 
-		if pl.GetArgumentInt32(params, 2) == 0:
+		if pl.GetArgumentInt32(_params, 2) == AcquireMethod.PickUp:
 			if self.weapons_block:
-				item_def = s2.GetEntSchema2(item, "CEconItemView", "m_iItemDefinitionIndex", 0)
-				weapon = WeaponEnum.get_name_by_defindex(item_def)
-				# self.cr_core.print(f"[HookDetour] [can_acquire_ptr] weapon: {weapon}")
-				# self.cr_core.print(f"[HookDetour] [can_acquire_ptr] weapons_list[0]: {self.weapons_list[0]}, weapons_list[1]: {self.weapons_list[1]}")
+				item_definition = s2.GetEntSchema2(item, "CEconItemView", "m_iItemDefinitionIndex", 0)
+				weapon = WeaponEnum.get_name_by_defindex(item_definition)
 
 				if (not weapon in self.weapons_list[0]) and (not weapon in self.weapons_list[1]):
-					pl.SetReturnInt8(ret, AcquireResult.NotAllowedByTeam)
+					pl.SetReturnInt8(_ret, AcquireResult.NotAllowedByTeam)
 					return pl.ResultType.Supercede
+
+		return pl.ResultType.Ignored
+
+	def hook_on_weapon_equip(self):
+		on_weapon_equip = s2.GetGameConfigMemSig(self.gameconfig, "CCSPlayer_WeaponServices::Weapon_Equip")
+
+		dt = pl.DataType
+		# CCSPlayer_WeaponServices::Weapon_Equip(CCSPlayer_WeaponServices * this, CBasePlayerWeapon * pWeapon)
+		self.on_weapon_equip_ptr = pl.HookDetour(on_weapon_equip, dt.Int64, [dt.Pointer, dt.Pointer])
+
+		if not self.on_weapon_equip_ptr:
+			return 0
+
+		pl.AddCallback(self.on_weapon_equip_ptr, True, partial(self.on_weapon_equip))
+
+	def on_weapon_equip(self, _hook: int, _params: int, _count: int, _ret: int, _post: bool):
+		weapon_p = pl.GetArgumentPointer(_params, 1)
+		weapon_hndl = s2.EntPointerToEntHandle(weapon_p)
+		weapon_vdata = s2.GetWeaponVData(weapon_hndl)
+		weapon_name = s2.GetEntSchemaString2(weapon_vdata, "CCSWeaponBaseVData", "m_szName", 0)
+
+		if self.cr.current_round_are_custom():
+			if weapon_name in self.weapons_attributes[0]:
+				if "m_nZoomLevels" in self.weapons_attributes[0][weapon_name]:
+					if self.weapons_attributes[0][weapon_name]["m_nZoomLevels"] <= 0:
+						roundtime = s2.GetEntSchema2(self.gamerules, "CCSGameRules", "m_iRoundTime", 0)
+						s2.SetEntSchema(weapon_hndl, "CBasePlayerWeapon", "m_nNextSecondaryAttackTick", (roundtime * 64) + 10, True, 0)
 
 		return pl.ResultType.Ignored
