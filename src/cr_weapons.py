@@ -377,7 +377,7 @@ class CRWeapons(Plugin):
 				continue
 
 			self.weapons_storage[client].append(s2.GetEntityClassname(weapon))
-			self.cr.print(f"Weapon saved {s2.GetEntityClassname(weapon)}[h: {weapon}]")
+			# self.cr.print(f"Weapon saved {s2.GetEntityClassname(weapon)}[h: {weapon}]")
 
 	def clear_weapons(self, client):
 		weapons_list = s2.GetClientWeapons(client)
